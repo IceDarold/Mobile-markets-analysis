@@ -12,12 +12,23 @@ def write_to_log(message):
     str_format = f"{check_zero(time_now.tm_hour)}:{check_zero(time_now.tm_min)}:{check_zero(time_now.tm_sec)}"
     print(f"{str_format} {message}")
     with open("log.txt", "a") as log:
-        log.write(f"{str_format}. {message}\n")
+        try:
+            log.write(f"{str_format}. {message}\n")
+        except UnicodeEncodeError as err:
+            log.write(f"UnicodeEncodeError: {err.reason}\n")
 
 
 def clear_log():
     with open("log.txt", "w") as log:
         log.write("")
+
+
+def clear_falied():
+    with open("process_info.json", "r+") as file:
+        data = file.read()
+        process_info: dict[str, list] = json.loads(data)
+        process_info["Failed"] = []
+        json.dump(process_info, file, indent=4)
 
 
 def main():
@@ -30,14 +41,20 @@ def main():
     app_list = {}
     total = 0
     this_session = 0
-    # process_info = {"Done developers": [], "Current developer": [None, 0]}
+    start = 0
+    failed_list = []
+    # process_info = {"Done developers": [], "Current developer": [None, 0], "Failed": []}
     with open("process_info.json", "r") as file:
         data = file.read()
         process_info: dict[str, list] = json.loads(data)
 
     with open("developers.json", "r") as file:
         developers_dict: dict = json.loads(file.read())
+    count = 0
     for key, value in developers_dict.items():
+        count += 1
+        if count < start:
+            continue
         try:
             if key in process_info["Done developers"]:
                 continue
@@ -71,6 +88,7 @@ def main():
                 process_info["Current developer"] = [key, len(games[1])]
             elif games[0][0] == "404":
                 write_to_log(f"Error: {games[0][1]} in {key}")
+                process_info["Failed"].append(key)
                 continue
             was = False
             total += len(games[1])
@@ -92,7 +110,8 @@ def main():
     if this_session != 0:
         write_to_log(f"Save {this_session} apps to json")
         response = utilities.save_to_json(app_list, "apps.json", operation_type="a",
-                                          sort_key_func=lambda app: app[1]["Rating scores"]["Current market position by number of ratings"])
+                                          sort_key_func=lambda app: app[1]["Rating scores"][
+                                              "Current market position by number of ratings"])
         if response[0] != 200:
             write_to_log(response[1])
     write_to_log("Finished")
