@@ -28,7 +28,7 @@ def save_to_json(data: dict | list, json_name: str, operation_type: str = "r", s
     :param operation_type: type of interaction with json file: a - append new data to file, r - rewrite all information
     :param sort_key_func: is you want to sort data, write here function, which will sort data
     """
-    with open(os.path.abspath(json_name), 'w+') as file:
+    with open(json_name, 'r+') as file:
         if operation_type == "a":
             json_data = file.read()
             if json_data == "":
@@ -51,6 +51,8 @@ def save_to_json(data: dict | list, json_name: str, operation_type: str = "r", s
             sorted_data = list(sorted(additional_data, key=sort_key_func))
         else:
             return 203, "Error data"
+        file.seek(0)
+        file.truncate()
         json.dump(sorted_data, file, indent=4)
         return 200, "Succeed"
 

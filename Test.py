@@ -22,7 +22,6 @@ import utilities
 #     else:
 #         count += 1
 #         print("Succeed", count)
-# with open("test.txt", "w") as test:
-#     test.write("first")
-#     test.write("second")
-print(os.path.abspath("log.txt"))
+with open("apps.json", "+") as test:
+    print(test.read())
+# print(os.path.abspath("log.txt"))

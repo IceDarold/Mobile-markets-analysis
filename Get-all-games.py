@@ -48,7 +48,7 @@ def main():
                     sleep_time += add_time
                 print(
                     f"Got error: {games[0][0]}: {games[0][1]}. Save {this_session + len(games[1])} apps to json and wait for {sleep_time}")
-                process_info["Current developer"] = key, len(games[1].items())
+                process_info["Current developer"] = [key, len(games[1].items())]
                 start_time = time.time()
                 app_list.update(games[1])
                 utilities.save_to_json(app_list, "apps.json", operation_type="a",
@@ -92,7 +92,7 @@ def main():
     if this_session != 0:
         write_to_log(f"Save {this_session} apps to json")
         response = utilities.save_to_json(app_list, "apps.json", operation_type="a",
-                                          sort_key_func=lambda app: app[1]["Rating scores"]["Total ratings"])
+                                          sort_key_func=lambda app: app[1]["Rating scores"]["Current market position by number of ratings"])
         if response[0] != 200:
             write_to_log(response[1])
     write_to_log("Finished")
