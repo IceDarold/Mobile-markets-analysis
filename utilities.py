@@ -1,7 +1,9 @@
 import json
+import os
 
 import requests
 from bs4 import BeautifulSoup
+import data_class
 
 
 def convert_div_to_dict(divs) -> dict[int, dict]:
@@ -18,26 +20,39 @@ def convert_div_to_dict(divs) -> dict[int, dict]:
     return devs
 
 
-def save_to_json(data: dict, json_name: str, operation_type: str = "r") -> None:
+def save_to_json(data: dict | list, json_name: str, operation_type: str = "r", sort_key_func=None) -> (int, str):
     """
-    Save data in dict format to json file
+    Save data to json file
     :param data: dict with information
     :param json_name: json file name
     :param operation_type: type of interaction with json file: a - append new data to file, r - rewrite all information
+    :param sort_key_func: is you want to sort data, write here function, which will sort data
     """
-    additional_dict = {}
-    if operation_type == "a":
-        try:
-            with open(json_name, "r") as json_file:
-                json_data = json_file.read()
-                additional_dict = json.loads(json_data)
-        except Exception as err:
-            print(f"Error: {err}")
-    with open(json_name, 'w') as file:
-        # Записываем словарь в файл в формате JSON
-        data.update(additional_dict)
-        sorted_dict = dict(sorted(data.items(), key=lambda info: info[1]["Rating index"]))
-        json.dump(sorted_dict, file, indent=4)
+    with open(os.path.abspath(json_name), 'w+') as file:
+        if operation_type == "a":
+            json_data = file.read()
+            if json_data == "":
+                additional_data = {} if isinstance(data, dict) else []
+                print(f"No data in file: {json_data}")
+            else:
+                additional_data = json.loads(json_data)
+            if isinstance(data, dict):
+                additional_data.update(data)
+            elif isinstance(data, list):
+                additional_data.extend(data)
+            else:
+                return 203, "Error data"
+            if len(additional_data) < data_class.size_history:
+                return 202, f"Size history fail. Was: {data_class.size_history}. Now: {len(additional_data)}"
+            data_class.size_history = len(additional_data)
+        if isinstance(data, dict):
+            sorted_data = dict((sorted(additional_data.items(), key=sort_key_func)))
+        elif isinstance(data, list):
+            sorted_data = list(sorted(additional_data, key=sort_key_func))
+        else:
+            return 203, "Error data"
+        json.dump(sorted_data, file, indent=4)
+        return 200, "Succeed"
 
 
 def get_developers_information(rating_range: tuple, json_name: str = "", operation_type: str = "r") -> dict[int, dict]:
@@ -53,7 +68,9 @@ def get_developers_information(rating_range: tuple, json_name: str = "", operati
     for index in range(rating_range[0], rating_range[1], 20):
         print(index)
         using_url = url + str(index)
-        response = requests.get(using_url)
+        response = requests.get(using_url, headers={
+            "User-Agent": "Googlebot"
+        })
         # Проверяем статус ответа
         if response.status_code == 200:
             # Парсим HTML контент с помощью BeautifulSoup
@@ -69,13 +86,15 @@ def get_developers_information(rating_range: tuple, json_name: str = "", operati
     #     developers.pop(i, None)
     sorted_dict = dict(sorted(developers.items(), key=lambda info: info[1]["Rating index"]))
     if json_name != "":
-        save_to_json(sorted_dict, json_name, operation_type)
+        save_to_json(sorted_dict, json_name, operation_type, sort_key_func=lambda info: info[1]["Rating index"])
     return sorted_dict
 
 
 def get_info_about_developer_by_id(developer_id) -> dict | str:
     url = "https://www.androidrank.org/developer?id=" + str(developer_id)
-    response = requests.get(url)
+    response = requests.get(url, headers={
+        "User-Agent": "Googlebot"
+    })
     developer_info = {}
     # Check answer status
     if response.status_code == 200:
@@ -121,7 +140,9 @@ def get_info_about_app_by_link(link: str) -> dict | str:
     :return: if everything is okay, return dict with information, otherwise return error text
     """
     url = "https://www.androidrank.org" + link
-    response = requests.get(url)
+    response = requests.get(url, headers={
+        "User-Agent": "Googlebot"
+    })
     app_data = {}
     # Check answer status
     if response.status_code == 200:
@@ -131,19 +152,19 @@ def get_info_about_app_by_link(link: str) -> dict | str:
         for table in tables:
             application_info = {}
             for stat in table.find_all("tr"):
-                application_info[stat.th.text] = stat.td.text
+                application_info[stat.th.text[:-1]] = stat.td.text
             app_data[table.caption.text] = application_info
         rating_div = soup.find_all("div", class_="row")
         current_market_position = int(rating_div[2].find_next_sibling().find_all("em")[-2].text[1:])
         app_data["Rating scores"]["Current market position by number of ratings"] = current_market_position
 
-        #RELATED APPS
+        # RELATED APPS
         related_apps_list = []
         for related_apps in rating_div[1].find_all("div", class_="flex-shrink-0 m-1"):
             related_apps_list.append(related_apps.img["alt"])
         app_data["Related apps"] = related_apps_list
 
-        # DOWNLOAD MILESONES
+        # DOWNLOAD MILESTONES
         milestone_table = soup.find_all('table', class_='download_milestones')
         milestones_dict: dict[int, str] = {}
         for milestone in milestone_table[0].find_all("tr"):
@@ -152,19 +173,38 @@ def get_info_about_app_by_link(link: str) -> dict | str:
             milestones_dict[number] = date
             milestones_dict = dict(sorted(milestones_dict.items()))
         app_data["Download level stats"] = milestones_dict
+
+        # META DATA
+        app_data["Meta data"] = {"Service link": link}
+
         return app_data
     else:
         return response.text
 
 
-def get_all_developer_games(developer_id: int | str) -> list:
+def get_all_developer_games(developer_id: int | str, limit: int = -1) -> tuple[tuple[str, str], dict]:
     """
-    Return list with links to all developer games
+    Return information about operation in format of ((operation code, operation code description), list with links to
+    all developer games)
     """
-    developer = get_info_about_developer_by_id(developer_id)
-    if type(developer) == str:
-        print(developer)
-    else:
-        apps: dict = developer["Apps"]
-        for link in apps.values():
-            print(get_info_about_app_by_link(link))
+    try:
+        developer = get_info_about_developer_by_id(developer_id)
+        app_list = {}
+        if isinstance(developer, str):
+            separation_index = developer.find(":")
+            return (developer[:separation_index], developer[separation_index:]), app_list
+        else:
+            apps: dict = developer["Apps"]
+            count = 0
+            for link in apps.values():
+                if 0 < limit <= count:
+                    return ("201", "Operation was interrupted"), app_list
+                count += 1
+                app = get_info_about_app_by_link(link)
+                if isinstance(app, str):
+                    separation_index = app.find(":")
+                    return (app[:separation_index], app[separation_index:]), app_list
+                app_list[app["Android application info"]["Title"]] = app
+    except Exception as err:
+        return ("404", str(err)), {}
+    return ("200", "Succeed"), app_list
