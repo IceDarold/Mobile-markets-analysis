@@ -1,14 +1,8 @@
 {
-    "Done developers": [
-        "Google LLC",
-        "Meta Platforms, Inc.",
-        "WhatsApp LLC",
-        "ELECTRONIC ARTS",
-        "Microsoft Corporation",
-        "Instagram",
-        "Miniclip.com",
-        "Supercell",
-        "Garena International I"
-    ],
-    "Current developer": []
+    "Done developers": [],
+    "Current developer": [],
+    "Failed": [],
+    "List index out of range": [],
+    "Invalid literal for int() with base 10": [],
+    "Object has no attribute 'text'": [],
 }
