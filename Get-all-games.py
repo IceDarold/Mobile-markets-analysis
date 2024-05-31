@@ -53,7 +53,9 @@ def main():
     count = 0
     for key, value in developers_dict.items():
         count += 1
-        if count < start:
+        if (count < start or key in process_info["Failed"] or
+                key in process_info["Invalid literal for int() with base 10"] or
+                key in process_info["List index out of range"] or key in process_info["Object has no attribute 'text'"]):
             continue
         try:
             if key in process_info["Done developers"]:
@@ -88,7 +90,16 @@ def main():
                 process_info["Current developer"] = [key, len(games[1])]
             elif games[0][0] == "404":
                 write_to_log(f"Error: {games[0][1]} in {key}")
-                process_info["Failed"].append(key)
+                if "list index out of range" in games[0][1]:
+                    process_info["List index out of range"].append(key)
+                elif "invalid literal for int() with base 10" in games[0][1]:
+                    process_info["Invalid literal for int() with base 10"].append(key)
+                elif "object has no attribute 'text'" in games[0][1]:
+                    process_info["Object has no attribute 'text'"].append(key)
+                else:
+                    process_info["Failed"].append((key, games[0][1]))
+                with open("process_info.json", "w") as file:
+                    json.dump(process_info, file, indent=4)
                 continue
             was = False
             total += len(games[1])
