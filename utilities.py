@@ -4,7 +4,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 import data_class
-
+import asyncio
 
 def convert_div_to_dict(divs) -> dict[int, dict]:
     devs = {}
@@ -45,12 +45,20 @@ def save_to_json(data: dict | list, json_name: str, operation_type: str = "r", s
             if len(additional_data) < data_class.size_history:
                 return 202, f"Size history fail. Was: {data_class.size_history}. Now: {len(additional_data)}"
             data_class.size_history = len(additional_data)
-        if isinstance(data, dict):
-            sorted_data = dict((sorted(additional_data.items(), key=sort_key_func)))
-        elif isinstance(data, list):
-            sorted_data = list(sorted(additional_data, key=sort_key_func))
+            if isinstance(data, dict):
+                sorted_data = dict((sorted(additional_data.items(), key=sort_key_func)))
+            elif isinstance(data, list):
+                sorted_data = list(sorted(additional_data, key=sort_key_func))
+            else:
+                return 203, "Error data"
         else:
-            return 203, "Error data"
+            data_class.size_history = len(data)
+            if isinstance(data, dict):
+                sorted_data = dict((sorted(data.items(), key=sort_key_func)))
+            elif isinstance(data, list):
+                sorted_data = list(sorted(data, key=sort_key_func))
+            else:
+                return 203, "Error data"
         file.seek(0)
         file.truncate()
         json.dump(sorted_data, file, indent=4)
@@ -67,8 +75,9 @@ def get_developers_information(rating_range: tuple, json_name: str = "", operati
     """
     url = "https://www.androidrank.org/developers/ranking?&start="
     developers = {}
-    for index in range(rating_range[0], rating_range[1], 20):
-        print(index)
+    last_id = 0
+    for index in range(rating_range[0], ((rating_range[1] // 20) + 1) * 20 + 1, 20):
+        print(f"Got {index} developers")
         using_url = url + str(index)
         response = requests.get(using_url, headers={
             "User-Agent": "Googlebot"
@@ -84,8 +93,10 @@ def get_developers_information(rating_range: tuple, json_name: str = "", operati
             developers.update(converted_divs)
         else:
             print(f'Error {response.text}')
+        last_id = index
     # for i in range(rating_range[1] + 1, index + 20):
     #     developers.pop(i, None)
+
     sorted_dict = dict(sorted(developers.items(), key=lambda info: info[1]["Rating index"]))
     if json_name != "":
         save_to_json(sorted_dict, json_name, operation_type, sort_key_func=lambda info: info[1]["Rating index"])
@@ -99,17 +110,39 @@ def get_info_about_developer_by_id(developer_id) -> dict | str:
     })
     developer_info = {}
     # Check answer status
+    index = 0
     if response.status_code == 200:
         # Parse HTML contet with BeautifulSoup
         soup = BeautifulSoup(response.content, 'html.parser')
         divs = soup.find_all('table', class_='appstat')[0].find_all("tr")
-        developer_info["Title"] = divs[0].find("td").text
-        developer_info["Country"] = divs[1].find("td").a.text
-        developer_info["Address"] = divs[2].find("td").text
-        developer_info["Web"] = divs[3].find("td").text
-        developer_info["Total ratings"] = int(divs[4].find("td").text.replace(",", ""))
-        developer_info["Average rating"] = float(divs[5].find("td").text)
-        developer_info["Installs (achieved)"] = int(divs[6].find("td").text.replace(",", ""))
+        developer_info["Title"] = ""
+        developer_info["Country"] = ""
+        developer_info["Address"] = ""
+        developer_info["Web"] = ""
+        developer_info["Total ratings"] = ""
+        developer_info["Average rating"] = ""
+        developer_info["Installs (achieved)"] = ""
+        if divs[index].find("th").text == "Title:":
+            developer_info["Title"] = divs[index].find("td").text
+            index += 1
+        if divs[index].find("th").text == "Country:":
+            developer_info["Country"] = divs[index].find("td").a.text
+            index += 1
+        if divs[index].find("th").text == "Address:":
+            developer_info["Address"] = divs[index].find("td").text
+            index += 1
+        if divs[index].find("th").text == "Web:":
+            developer_info["Web"] = divs[index].find("td").text
+            index += 1
+        if divs[index].find("th").text == "Total ratings:":
+            developer_info["Total ratings"] = int(divs[index].find("td").text.replace(",", ""))
+            index += 1
+        if divs[index].find("th").text == "Average rating:":
+            developer_info["Average rating"] = float(divs[index].find("td").text)
+            index += 1
+        if divs[index].find("th").text == "Installs (achieved):":
+            developer_info["Installs (achieved)"] = int(divs[index].find("td").text.replace(",", ""))
+            index += 1
 
         apps = soup.find_all("table", class_="table")
         developer_info["Number of apps"] = len(apps[0].find_all("tr")) - 1
@@ -210,3 +243,4 @@ def get_all_developer_games(developer_id: int | str, limit: int = -1) -> tuple[t
     except Exception as err:
         return ("404", str(err)), {}
     return ("200", "Succeed"), app_list
+print(0)
