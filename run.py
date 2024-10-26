@@ -8,8 +8,8 @@ import time
 
 import aiohttp
 import keyboard
-import requests
 from bs4 import BeautifulSoup
+import telebot
 
 
 def pprint(data, start_time=-1, current_number=-1, total=-1, fix_length=100, show_additional_info=True):
@@ -56,7 +56,7 @@ def install_packages():
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 
 
-async def get_info_about_developer_by_id(developer_id, session) -> dict | str:
+async def get_info_about_developer_by_id(developer_id, session, func_information) -> dict | str:
     url = "https://www.androidrank.org/developer?id=" + str(developer_id)
     async with session.get(url, headers={
         "User-Agent": "Googlebot"
@@ -66,9 +66,14 @@ async def get_info_about_developer_by_id(developer_id, session) -> dict | str:
         index = 0
         if response.status == 429:
             retry_after = int(response.headers.get("Retry-After", 1))
-            print(f"Too many requests - retrying after {retry_after} seconds")
+            pprint(f"Too many requests - retrying after {retry_after} seconds",
+                   current_number=func_information["Get_apps_links"]["Link count"],
+                   total=func_information["Get_apps_links"]["Total"],
+                   start_time=func_information["Get_apps_links"]["Start time"],
+                   fix_length=50
+                   )
             await asyncio.sleep(retry_after)
-            return await get_info_about_developer_by_id(developer_id, session)
+            return await get_info_about_developer_by_id(developer_id, session, func_information)
         elif response.status == 200:
             # Parse HTML content with BeautifulSoup
             soup = BeautifulSoup(await response.text(), 'html.parser')
@@ -144,7 +149,7 @@ async def get_developers_page(session, url, function_information):
             got_count = 20 if function_information["Get_all_developers"]["Total developers"] > current_count + 20 else \
                 function_information["Get_all_developers"]["Total developers"] - current_count
             function_information["Get_all_developers"]["Count"] += got_count
-            pprint(f"Got {function_information["Get_all_developers"]["Count"]} developers",
+            pprint(f"Got {function_information['Get_all_developers']['Count']} developers",
                    function_information["Main"]["Start time"],
                    function_information["Get_all_developers"]["Count"],
                    function_information["Get_all_developers"]["Total developers"])
@@ -168,13 +173,17 @@ async def get_all_developers(func_information):
 
 
 async def get_developer_apps_links(session, dev_id, func_information: dict):
-    dev_info = await get_info_about_developer_by_id(dev_id, session)
+    dev_info = await get_info_about_developer_by_id(dev_id, session, func_information)
     if isinstance(dev_info, dict):
         func_information["Get_apps_links"]["Link count"] += 1
-        print(f"Got info about {dev_id} (#{func_information["Get_apps_links"]["Link count"]})")
-        func_information["Get_apps_links"]["Apps links list"].extend(
+        pprint(f"Got info about {dev_id}",
+               current_number=func_information["Get_apps_links"]["Link count"],
+               total=func_information["Get_apps_links"]["Total"],
+               start_time=func_information["Get_apps_links"]["Start time"],
+               fix_length=50
+               )
+        func_information["Get_apps_links"]["Apps links"]["List"].extend(
             ["https://www.androidrank.org" + link for link in dev_info["Apps"].values()])
-        return func_information["Get_apps_links"]["Apps links list"]
     else:
         print("Error {}".format(dev_info))
         with open("log.txt", "r+") as log:
@@ -184,10 +193,24 @@ async def get_developer_apps_links(session, dev_id, func_information: dict):
 
 async def get_apps_links(developer_ids, func_information: dict):
     func_information["Get_apps_links"]["Link count"] = 0
-    func_information["Get_apps_links"]["Apps links list"] = []
+    func_information["Get_apps_links"]["Start time"] = time.time()
+    func_information["Get_apps_links"]["Total"] = len(developer_ids)
     async with aiohttp.ClientSession() as session:
         tasks = [get_developer_apps_links(session, dev_id, func_information) for dev_id in developer_ids]
         return await asyncio.gather(*tasks)
+
+
+def write_to_log(message):
+    def check_zero(number: int) -> str:
+        return str(number) if len(str(number)) == 2 else f"0{number}"
+
+    time_now = time.localtime()
+    str_format = f"{check_zero(time_now.tm_hour)}:{check_zero(time_now.tm_min)}:{check_zero(time_now.tm_sec)}"
+    with open("log.txt", "a") as log:
+        try:
+            log.write(f"{str_format}. {message}\n")
+        except UnicodeEncodeError as err:
+            log.write(f"UnicodeEncodeError: {err.reason}\n")
 
 
 async def get_app_by_link(url, session):
@@ -198,14 +221,17 @@ async def get_app_by_link(url, session):
         # Check answer status
         if response.status == 429:
             retry_after = int(response.headers.get("Retry-After", 1))
-            global time_error_count
-            time_error_count += 1
             pprint(f"Too many requests - retrying after {retry_after} seconds")
             await asyncio.sleep(retry_after)
             return await get_app_by_link(url, session)
         if response.status == 200:
             # GENERAL STATS
-            soup = BeautifulSoup(await response.text(), 'html.parser')
+            try:
+                soup = BeautifulSoup(await response.text(), 'html.parser')
+            except asyncio.TimeoutError:
+                write_to_log(f"{url}: asyncio.TimeoutError")
+                await asyncio.sleep(1)
+                await get_app_by_link(url, session)
             tables = soup.find_all('table', class_='appstat')
             for table in tables:
                 application_info = {}
@@ -241,11 +267,30 @@ async def get_app_by_link(url, session):
 
 
 async def get_app(session, url, func_information):
-    app_info = await get_app_by_link(url, session)
+    try:
+        app_info = await get_app_by_link(url, session)
+    except aiohttp.client_exceptions.ServerDisconnectedError:
+        pprint("Server disconnected unexpectedly")
+        write_to_log("Server disconnected unexpectedly")
+        await asyncio.sleep(1)
+        await get_app(session, url, func_information)
+        return
+    except aiohttp.ClientError as e:
+        await asyncio.sleep(1)
+        await get_app(session, url, func_information)
+        write_to_log(f"Client error occurred: {e}")
+        pprint(f"Client error occurred: {e}")
+        return
+    except TimeoutError:
+        await asyncio.sleep(1)
+        await get_app(session, url, func_information)
+        write_to_log(f"Timeout error")
+        pprint(f"Timeout error")
+        return
     if isinstance(app_info, dict):
         func_information["Get_all_applications"]["Got application count"] += 1
-        pprint(f"Got info about {url} (#{func_information["Get_all_applications"]["Got application count"]})",
-               func_information["Main"]["Start time"],
+        pprint(f'Got info about {url} (#{func_information["Get_all_applications"]["Got application count"]})',
+               func_information["Get_all_applications"]["Start time"],
                func_information["Get_all_applications"]["Got application count"],
                func_information["Get_all_applications"]["Total applications"])
         func_information["Get_all_applications"]["Apps list"].append(app_info)
@@ -269,10 +314,14 @@ def check_developer_info_exist(file_type) -> (bool, dict | None):
     "l" - apps links,
     "a" - apps info
     """
-    if file_type == "d": file_name = "developers.json"
-    elif file_type == "l": file_name = "apps_links.json"
-    elif file_type == "a": file_name = "apps.json"
-    else: raise ValueError(f"invalid file type: '{file_type}'")
+    if file_type == "d":
+        file_name = "developers.json"
+    elif file_type == "l":
+        file_name = "apps_links.json"
+    elif file_type == "a":
+        file_name = "apps.json"
+    else:
+        raise ValueError(f"invalid file type: '{file_type}'")
 
     if not os.path.exists(file_name): return False,
     with open(file_name, "r") as f:
@@ -300,6 +349,17 @@ def check_files(file_type):
     return True,
 
 
+def send_file_to_user(tg_user_id, file_name):
+    API_TOKEN = '6995683060:AAEibC05Mf-l2xQKo0DGyXu5WE5A2JRL0XY'
+    bot = telebot.TeleBot(API_TOKEN)
+    with open(file_name, 'rb') as file:
+        try:
+            bot.send_document(tg_user_id, file)
+        except telebot.apihelper.ApiTelegramException:
+            return False, "ApiTelegramException"
+    return True,
+
+
 def main():
     func_information: dict = {
         "Main": {
@@ -308,71 +368,163 @@ def main():
     }
     print("Starting all processes...")
 
-    print("1/3. Trying to get information about developers")
+    print("1/4. Trying to get information about developers")
     func_information["Get_all_developers"] = {
         "Developers": {}
     }
     information = check_developer_info_exist("d")
-    update = False #Need to be true
-    if False:#Need to be deleted
-        if information[0]:
-            print(f"Information about developers already exists. It was updated on {information[1]}. Do you want to "
-                   f"check it? [y]-check, [n]-update database", end="")
-            while True:
-                if keyboard.is_pressed('y'):
-                    print()
-                    print("Okay! Checking developers data...")
-                    result = check_files("d")
-                    time.sleep(2)
-                    if not result[0]:
-                        print("Unfortunately the file is damaged. The database needs to be updated")
+    update = True
+    if information[0]:
+        print(f"Information about developers already exists. It was updated on {information[1]}. Do you want to "
+              f"check it? [y]-check, [n]-update database", end="")
+        while True:
+            if keyboard.is_pressed('y'):
+                print()
+                print("Okay! Checking developers data...")
+                result = check_files("d")
+                time.sleep(2)
+                if not result[0]:
+                    print("Unfortunately the file is damaged. The database needs to be updated")
+                    break
+                else:
+                    print("Data base is ok! Do you want to go on or to update it? [y]-update, [n]-go on", end="")
+                while True:
+                    if keyboard.is_pressed('y'):
+                        print()
                         break
-                    else:
-                        print("Data base is ok! Do you want to go on or to update it? [y]-update, [n]-go on", end="")
-                    while True:
-                        if keyboard.is_pressed('y'):
-                            print()
-                            break
-                        if keyboard.is_pressed('n'):
-                            print()
-                            update = False
-                            break
-                    break
-                if keyboard.is_pressed('n'):
-                    print()
-                    break
+                    if keyboard.is_pressed('n'):
+                        print()
+                        update = False
+                        break
+                break
+            if keyboard.is_pressed('n'):
+                print()
+                break
     if update:
         print("Getting information about developers...")
         asyncio.run(get_all_developers(func_information))
         with open("developers.json", "w") as f:
-            func_information["Get_all_developers"]["Developers"]["Update date"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time()))
+            func_information["Get_all_developers"]["Developers"]["Update date"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                                                                                time.gmtime(
+                                                                                                    time.time()))
             json.dump(func_information["Get_all_developers"]["Developers"], f)
         print("\nGot all developers information!")
     else:
         with open("developers.json", "r") as f:
             func_information["Get_all_developers"]["Developers"] = dict(json.load(f))
 
-    print("2/3. Trying to get apps links")
-    func_information["Get_apps_links"] = {
-        "Function start time": time.time()
+    print("2/4. Trying to get developers links")
+    time.sleep(1)
+    func_information["Developers links"] = {
+        "Ids list": []
     }
-    links = []
-    asyncio.run(get_apps_links(func_information["Get_all_developers"]["Developers"], func_information))
-    with open("apps_links.json", "w") as file:
-        json.dump(links, file)
-    print("Got all apps links!")
+    for value in list(func_information["Get_all_developers"]["Developers"].values())[:-1]:
+        func_information["Developers links"]["Ids list"].append(str(value["Id"]))
 
-    print("3/3. Trying to get application information and create database")
-    with open("apps_links.json", "r") as apps_urls:
-        links = json.load(apps_urls)
+    print("3/4. Trying to get apps links")
+    func_information["Get_apps_links"] = {
+        "Function start time": time.time(),
+        "Apps links": {
+            "List": []
+        }
+    }
+    information = check_developer_info_exist("l")
+    update = True
+    if information[0]:
+        print(f"Apps links already exists. It was updated on {information[1]}. Do you want to "
+              f"check it? [y]-check, [n]-update database", end="")
+        while True:
+            if keyboard.is_pressed('y'):
+                print()
+                print("Okay! Checking apps links...")
+                time.sleep(1)
+                result = check_files("l")
+                if not result[0]:
+                    print("Unfortunately the file is damaged. The file needs to be updated")
+                    break
+                else:
+                    print("The data is ok! Do you want to go on or to update it? [y]-update, [n]-go on", end="")
+                while True:
+                    if keyboard.is_pressed('y'):
+                        print()
+                        break
+                    if keyboard.is_pressed('n'):
+                        print()
+                        update = False
+                        break
+                break
+            if keyboard.is_pressed('n'):
+                print()
+                break
+    if update:
+        print("Getting apps links...")
+        asyncio.run(get_apps_links(func_information["Developers links"]["Ids list"], func_information))
+        with open("apps_links.json", "w") as f:
+            func_information["Get_apps_links"]["Apps links"]["Update date"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                                                                            time.gmtime(
+                                                                                                time.time()))
+            json.dump(func_information["Get_apps_links"]["Apps links"], f)
+        print("\nGot all apps links!")
+    else:
+        with open("apps_links.json", "r") as f:
+            func_information["Get_apps_links"]["Apps links"] = dict(json.load(f))
+
+    print("4/4. Trying to get application information and create database")
     func_information["Get_all_applications"] = {}
     func_information["Get_all_applications"]["Apps list"] = []
+    func_information["Get_all_applications"]["Start time"] = time.time()
     func_information["Get_all_applications"]["Got application count"] = 0
-    func_information["Get_all_applications"]["Total applications"] = len(links)
-    asyncio.run(get_all_applications(links, func_information))
-    with open("apps_list.json", "w") as file:
+    func_information["Get_all_applications"]["Total applications"] = len(
+        func_information["Get_apps_links"]["Apps links"]["List"])
+    asyncio.run(get_all_applications(func_information["Get_apps_links"]["Apps links"]["List"], func_information))
+    file_name = f"apps_{time.strftime('%Y-%m-%d', time.gmtime(time.time()))}.json"
+    with open(file_name, "w") as file:
         json.dump(func_information["Get_all_applications"]["Apps list"], file)
-    print("Finished. It took {}".format(time.time() - func_information["Main"]["Start time"]))
+    print("\nFinished. It took {}. Database in the file apps.json".format(
+        time.time() - func_information["Main"]["Start time"]))
+
+    print(f"Do you want to send it to you in telegram? [y]-enter id and send to it, [n]-don't send, [s]-send to standard user", end="")
+    while True:
+        if keyboard.is_pressed('y'):
+            print()
+            while True:
+                try:
+                    tg_id = int(input("\nOkay! Please, enter your id (you can get it by writing to the https://t.me/userinfobot: "))
+                    break
+                except Exception:
+                    print("Wrong answer")
+            time.sleep(1)
+            while True:
+                res = send_file_to_user(tg_id, file_name)
+                if res[0]:
+                    print("Sent!")
+                    break
+                elif res[1] == "ApiTelegramException":
+                    print("You need to start the bot https://t.me/androidrank_parsing_bot and try again")
+                    print("Press [r], when you are ready")
+                    while True:
+                        if keyboard.is_pressed('r'):
+                            break
+            break
+
+        if keyboard.is_pressed('n'):
+            print("\nOkay! That's it")
+            break
+        if keyboard.is_pressed("s"):
+            standard_user_id = 7183822341
+            print("\nOkay! Sending to standard user...")
+            while True:
+                res = send_file_to_user(standard_user_id, file_name)
+                if res[0]:
+                    print("Sent!")
+                    break
+                else:
+                    print(f"Error: {res[1]}")
+                    print(f"Idk how, but try to fix it and press [r], when you are ready")
+                    while True:
+                        if keyboard.is_pressed('r'):
+                            break
+            break
 
 
 if __name__ == "__main__":
